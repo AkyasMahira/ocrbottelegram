@@ -9,7 +9,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 TOKEN = os.environ["BOT_TOKEN"]
 OWNER = int(os.environ["OWNER_ID"])
 SCALE = 2.5  # ~180 dpi; naikkan kalau hasil kurang akurat (RAM ikut naik)
-HEADING = re.compile(r"^(bab|chapter)\s+\w+", re.I)
+HEADING = re.compile(r"^(?:(?:bab|chapter|bagian|part)\s*(?:\d+|[ivxlc]+)\b|prolog|epilog)", re.I)
+HEADING_NUM = re.compile(r"^(bab|chapter|bagian|part)\s*(\d+|[ivxlc]+)", re.I)
 PROGRESS_INTERVAL = 3  # detik; jeda minimum antar update progress ke Telegram
 
 engine = RapidOCR()
@@ -21,13 +22,33 @@ def ocr_page(img):
         return []
     lines = sorted((b[0][1], b[2][1] - b[0][1], t) for b, t, _ in res)
     med = sorted(h for _, h, _ in lines)[len(lines) // 2]
-    paras, prev = [[]], None
-    for y, _, t in lines:
-        if prev is not None and y - prev > 1.8 * med:
-            paras.append([])
-        paras[-1].append(t)
+    paras, prev = [[False, []]], None
+    for y, h, t in lines:
+        is_big = h > 1.25 * med and len(t) < 60 and not t.rstrip().endswith(".") and not t.strip().isdigit()
+        if is_big:
+            if paras[-1][1]:
+                paras.append([False, []])
+            paras[-1] = [True, [t]]
+            paras.append([False, []])
+        else:
+            if prev is not None and y - prev > 1.8 * med:
+                paras.append([False, []])
+            paras[-1][1].append(t)
         prev = y
-    return [" ".join(p) for p in paras if p]
+    return [(" ".join(p), big) for big, p in paras if p]
+
+
+def normalize_heading(text):
+    return HEADING_NUM.sub(lambda m: f"{m.group(1)} {m.group(2)}", text, count=1)
+
+
+def is_heading(text, big, heading):
+    mode, pattern = heading
+    if mode == "off":
+        return False
+    if mode == "regex":
+        return bool(pattern.search(text))
+    return big or (HEADING.match(text) and len(text) < 60)
 
 
 def format_duration(seconds):
@@ -37,7 +58,7 @@ def format_duration(seconds):
     return f"{h}j {m}m {s}dtk" if h else f"{m}m {s}dtk"
 
 
-def run_ocr(path, fmt, progress):
+def run_ocr(path, fmt, progress, heading):
     pdf = pdfium.PdfDocument(path)
     n, paras = len(pdf), []
     for i in range(n):
@@ -47,11 +68,14 @@ def run_ocr(path, fmt, progress):
         progress(i + 1, n)
     out = f"{path[:-4]}.{fmt}"
     if fmt == "txt":
-        open(out, "w", encoding="utf-8").write("\n\n".join(paras))
+        open(out, "w", encoding="utf-8").write("\n\n".join(t for t, _ in paras))
     else:
         d = Document()
-        for p in paras:
-            d.add_heading(p, 1) if HEADING.match(p) and len(p) < 60 else d.add_paragraph(p)
+        for t, big in paras:
+            if is_heading(t, big, heading):
+                d.add_heading(normalize_heading(t), 1)
+            else:
+                d.add_paragraph(t)
         d.save(out)
     return out
 
@@ -66,6 +90,26 @@ async def fmt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Output: {f}")
 
 
+async def heading_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER:
+        return
+    mode = (ctx.args[0].lower() if ctx.args else "")
+    if mode == "auto":
+        ctx.user_data["heading"] = ("auto", None)
+    elif mode == "off":
+        ctx.user_data["heading"] = ("off", None)
+    elif mode == "regex":
+        pat = " ".join(ctx.args[1:])
+        try:
+            compiled = re.compile(pat, re.I)
+        except re.error as e:
+            return await update.message.reply_text(f"Regex tidak valid: {e}")
+        ctx.user_data["heading"] = ("regex", compiled)
+    else:
+        return await update.message.reply_text("Pakai: /heading auto|off|regex <pola>")
+    await update.message.reply_text(f"Heading: {mode}")
+
+
 async def on_pdf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER:
         return
@@ -75,6 +119,7 @@ async def on_pdf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if doc.file_size > 20 * 1024 * 1024:
         return await update.message.reply_text("File >20 MB, batas download bot. Pecah dulu.")
     fmt = ctx.user_data.get("fmt", "docx")
+    heading = ctx.user_data.get("heading", ("auto", None))
     msg = await update.message.reply_text("Mulai OCR...")
     loop = asyncio.get_running_loop()
     last_update = 0.0
@@ -103,7 +148,7 @@ async def on_pdf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             path = os.path.join(d, "in.pdf")
             await (await doc.get_file()).download_to_drive(path)
             start = time.time()
-            out = await asyncio.to_thread(run_ocr, path, fmt, progress)
+            out = await asyncio.to_thread(run_ocr, path, fmt, progress, heading)
             with open(out, "rb") as fh:
                 await update.message.reply_document(fh, filename=f"{doc.file_name[:-4]}.{fmt}")
     except Exception as e:
@@ -112,5 +157,6 @@ async def on_pdf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("fmt", fmt_cmd))
+app.add_handler(CommandHandler("heading", heading_cmd))
 app.add_handler(MessageHandler(filters.Document.PDF, on_pdf))
 app.run_polling()
