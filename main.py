@@ -23,15 +23,23 @@ def ocr_page(img):
     lines = sorted(((b[0][1] + b[2][1]) / 2, b[2][1] - b[0][1], t) for b, t, _ in res)
     med = sorted(h for _, h, _ in lines)[len(lines) // 2]
     paras, prev = [[False, []]], None
-    for y, h, t in lines:
-        is_big = h > 1.25 * med and len(t) < 60 and not t.rstrip().endswith(".") and not t.strip().isdigit()
+    for idx, (y, h, t) in enumerate(lines):
+        next_gap = lines[idx + 1][0] - y if idx + 1 < len(lines) else None
+        last_char = t.rstrip()[-1:] if t.rstrip() else ""
+        is_big = (
+            h >= 1.15 * med
+            and len(t) < 60
+            and last_char not in ".,?!\"'‘’“”"
+            and not t.strip().isdigit()
+            and (next_gap is None or next_gap >= 2.5 * med)
+        )
         if is_big:
             if paras[-1][1]:
                 paras.append([False, []])
             paras[-1] = [True, [t]]
             paras.append([False, []])
         else:
-            if prev is not None and y - prev > 1.8 * med:
+            if prev is not None and y - prev > 2.0 * med:
                 paras.append([False, []])
             paras[-1][1].append(t)
         prev = y
