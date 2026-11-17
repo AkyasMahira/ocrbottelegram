@@ -20,7 +20,7 @@ def ocr_page(img):
     res, _ = engine(img)
     if not res:
         return []
-    lines = sorted((b[0][1], b[2][1] - b[0][1], t) for b, t, _ in res)
+    lines = sorted(((b[0][1] + b[2][1]) / 2, b[2][1] - b[0][1], t) for b, t, _ in res)
     med = sorted(h for _, h, _ in lines)[len(lines) // 2]
     paras, prev = [[False, []]], None
     for y, h, t in lines:
