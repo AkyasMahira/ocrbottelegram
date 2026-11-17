@@ -1,4 +1,4 @@
-import asyncio, os, re, tempfile
+import asyncio, os, re, tempfile, time
 
 import pypdfium2 as pdfium
 from docx import Document
@@ -10,6 +10,7 @@ TOKEN = os.environ["BOT_TOKEN"]
 OWNER = int(os.environ["OWNER_ID"])
 SCALE = 2.5  # ~180 dpi; naikkan kalau hasil kurang akurat (RAM ikut naik)
 HEADING = re.compile(r"^(bab|chapter)\s+\w+", re.I)
+PROGRESS_INTERVAL = 3  # detik; jeda minimum antar update progress ke Telegram
 
 engine = RapidOCR()
 
@@ -27,6 +28,13 @@ def ocr_page(img):
         paras[-1].append(t)
         prev = y
     return [" ".join(p) for p in paras if p]
+
+
+def format_duration(seconds):
+    seconds = int(seconds)
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{h}j {m}m {s}dtk" if h else f"{m}m {s}dtk"
 
 
 def run_ocr(path, fmt, progress):
@@ -69,15 +77,32 @@ async def on_pdf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     fmt = ctx.user_data.get("fmt", "docx")
     msg = await update.message.reply_text("Mulai OCR...")
     loop = asyncio.get_running_loop()
+    last_update = 0.0
+    start = 0.0
 
     def progress(i, n):
-        if i % 10 == 0 or i == n:
-            asyncio.run_coroutine_threadsafe(msg.edit_text(f"OCR {i}/{n}"), loop)
+        nonlocal last_update
+        now = time.time()
+        if now - last_update < PROGRESS_INTERVAL and i != n:
+            return
+        last_update = now
+        elapsed = now - start
+        pct = i * 100 // n
+        if i == n:
+            text = f"OCR {i}/{n} (100%) selesai dalam {format_duration(elapsed)}"
+        elif i < 3:
+            text = f"OCR {i}/{n} ({pct}%)"
+        else:
+            rate = i / elapsed if elapsed > 0 else 0
+            eta = (n - i) / rate if rate > 0 else 0
+            text = f"OCR {i}/{n} ({pct}%) • ETA {format_duration(eta)}"
+        asyncio.run_coroutine_threadsafe(msg.edit_text(text), loop)
 
     try:
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "in.pdf")
             await (await doc.get_file()).download_to_drive(path)
+            start = time.time()
             out = await asyncio.to_thread(run_ocr, path, fmt, progress)
             with open(out, "rb") as fh:
                 await update.message.reply_document(fh, filename=f"{doc.file_name[:-4]}.{fmt}")
