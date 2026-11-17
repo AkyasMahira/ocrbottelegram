@@ -91,6 +91,23 @@ def run_ocr(path, fmt, progress, heading):
     return out
 
 
+async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER:
+        return await update.message.reply_text(
+            "Maaf, bot ini khusus dipakai developernya aja. Kalau butuh bot serupa, hubungi @zayssme."
+        )
+    await update.message.reply_text(
+        "Halo! Bot OCR PDF siap dipakai.\n\n"
+        "Cara pakai:\n"
+        "1. Kirim file PDF (maks 20 MB) langsung ke chat ini.\n"
+        "2. Bot akan OCR tiap halaman dan kirim progress + estimasi waktu selesai.\n"
+        "3. Hasil dikirim balik sebagai file .docx (default) atau .txt.\n\n"
+        "Perintah lain:\n"
+        "/fmt txt atau /fmt docx — pilih format output\n"
+        "/heading auto|off|regex <pola> — atur deteksi heading/bab"
+    )
+
+
 async def fmt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER:
         return
@@ -167,6 +184,7 @@ async def on_pdf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 app = Application.builder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start_cmd))
 app.add_handler(CommandHandler("fmt", fmt_cmd))
 app.add_handler(CommandHandler("heading", heading_cmd))
 app.add_handler(MessageHandler(filters.Document.PDF, on_pdf))
