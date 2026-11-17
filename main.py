@@ -33,6 +33,9 @@ def ocr_page(img):
             and not t.strip().isdigit()
             and (next_gap is None or next_gap >= 2.5 * med)
         )
+        if os.environ.get("OCR_DEBUG"):
+            gap = round((y - prev) / med, 2) if prev is not None else None
+            print(gap, round(h / med, 2), t[:25])
         if is_big:
             if paras[-1][1]:
                 paras.append([False, []])
